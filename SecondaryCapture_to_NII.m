@@ -209,53 +209,12 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
         Report = table(secondary_scans','VariableNames',{'Secondary_Image'});
         % For each of the secondary scans, find the matching image
         for sc=1:length(secondary_scans)
+            [Secondary_I,~,~,Secondary_Masks] = combine_secondaryCaptures(secondary_scans(sc));
+
+
             [~,secnam] = fileparts(secondary_scans{sc});
             fprintf('Looking for matches for %s\n',secnam);
-            % Get the dicom file metadata
-            mask_dcms = struct2table(fast_dcm_head(secondary_scans{sc},{'InstanceNumber','Rows','Columns'}));
-            mask_dcms = sortrows(mask_dcms,'InstanceNumber');
-            % Some directories are "dirty" with combined secondary and original
-            % images. Toss out any with lower pixel count. Why lower? It worked
-            % for the use-case this was developed for...it might not be the
-            % right call
-            mask_dcms(mask_dcms.Rows<max(mask_dcms.Rows),:) = [];
-            % Keep only unique instance numbers (for rare cases when secondary
-            % captures have apparently been re-saved in the same directory).
-            [~,ia] = unique(mask_dcms.InstanceNumber);
-            mask_dcms = mask_dcms(ia,:);
-            
-            if mask_dcms.Rows(1)~=mask_dcms.Columns(1)
-                % non-square images (which are often volumetric renderings)
-                continue
-            end
-            % Instantiate arrary
-            M = uint8(zeros([mask_dcms.Rows(1) mask_dcms.Columns(1) 3 height(mask_dcms)]));
-            for slice=1:height(mask_dcms)
-                % Get the pixel data
-                M(:,:,:,slice) = dicomread(mask_dcms.Filename{slice});
-            end
-            % swap 3rd and 4th dimensions to put color channels in dim4
-            M = permute(M,[1 2 4 3]);
-        
-            % compute correlation between channels
-            chancorr = corr(double(reshape(M,[],3)));
-            % get the index of the channel unlike the other two
-            diffi = find(sum(chancorr>0.999)==1);
-            % ensure mask channel is 1 (red)
-            if diffi==2
-                M = M(:,:,:,[2 1 3]);
-            elseif diffi==3
-                M = M(:,:,:,[3 2 1]);
-            end
-    
-            % Get the grayscale image
-            Secondary_I = mat2gray(M(:,:,:,2));
-            % replace the mask area with NaN
-            Secondary_I(M(:,:,:,1)~=M(:,:,:,2)) = NaN;
-            % Get the mask
-            Secondary_Mask = (double(M(:,:,:,1))./double(M(:,:,:,2)))>=1.5;
-            % Get rid of very small, spurious clusters in the image
-            Secondary_Mask = ~bwareaopen(~Secondary_Mask,5,6);
+
     
             % Get "Speeded Up Robust Features" from the image
             parfor slice=1:size(Secondary_I,3)
@@ -270,32 +229,27 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
             si_copy = Secondary_I;
     
             % Quickly sort potential matches 
-            Iz = cellfun(@(f) squeeze(mean(mean(f))),Primary_I,'Uni',0);
+            Iz = cellfun(@(f) squeeze(mean(mean(f))),{orig.Primary_I},'Uni',0);
             Sz = squeeze(mean(mean(Secondary_I,'omitnan'),'omitnan'));
             maxcorr = zeros(length(Iz),1);
             for p=1:length(Iz)
                 maxcorr(p) = quick_match(Sz,Iz{p});
             end
             [~,order] = sort(maxcorr,'descend');
-            origlist = origlist(order);
-            orighead = orighead(order);
-            Primary_I = Primary_I(order);
+            orig  = orig(order);
     
             
-            rho = NaN(length(origlist),1);
-            tform3d = cell(length(origlist),1);
-            flipdim1 = false(length(origlist),1);
-            refview = cell(length(origlist),1);
-            idx = cell(length(origlist),1);
-            for k=1:length(origlist)
+            rho = NaN(length(orig),1);
+            flipdim1 = false(length(orig),1);
+            for k=1:length(orig)
                 % Reset secondary capture
                 Secondary_I = si_copy;
                 MIP_Secondary = max(Secondary_I,[],3);
         
                 % Read in the image from origlist
-                [~,on] = fileparts(origlist{k});
+                [~,on] = fileparts(orig(k).list);
                 fprintf(sprintf('\t%s: ',on));
-                I = Primary_I{k};
+                I = orig(k).Primary_I;
         
                 % Extract features
                 f2 = cell(0);
@@ -305,19 +259,19 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
                 end
                 
                 % Find the substack that optimizes the number of matched points
-                [cI,idx{k},corresponds] = find_substack(f2,f1,I);
+                [cI,orig(k).idx,corresponds] = find_substack(f2,f1,I);
                 if ~corresponds
                     % No correspondance, try flipping
                     flipdim1(k) = true;
                     Secondary_I = flip(Secondary_I,1);
                     MIP_Secondary = max(Secondary_I,[],3);
-                    [cI,idx{k},corresponds] = find_substack(f2,f1_flip,I);
+                    [cI,orig(k).idx,corresponds] = find_substack(f2,f1_flip,I);
                     if ~corresponds
                         fprintf('No slicewise correspondance.\n')
                         continue
                     end
                 end
-                refview{k} = imref3d(size(cI));
+                orig(k).refview = imref3d(size(cI));
         
                 % Create maximum intensity projection of original image series
                 MIP_orig = max(cI,[],3);
@@ -333,12 +287,12 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
                     flipdim1(k) = ~flipdim1(k);
                     Secondary_I = flip(Secondary_I,1);
                     MIP_Secondary = max(Secondary_I,[],3);
-                    [cI,idx{k},corresponds] = find_substack(f2,f1_flip,I);
+                    [cI,orig(k).idx,corresponds] = find_substack(f2,f1_flip,I);
                     if ~corresponds
                         fprintf('No slicewise correspondance.\n')
                         continue
                     end
-                    refview{k} = imref3d(size(cI));
+                    orig(k).refview = imref3d(size(cI));
                     % Create maximum intensity projection of original image series
                     MIP_orig = max(cI,[],3);
                     tform = matchedpoint_registration(MIP_Secondary,MIP_orig);
@@ -359,9 +313,9 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
                 mat = tform.A;
                 mat = [mat(1:2,:);0 0 0;mat(3,:)];
                 mat = [mat(:,1:2) [0;0;1;0] mat(:,3)];
-                tform3d{k} = affinetform3d(mat);
+                orig(k).tform3d = affinetform3d(mat);
                 Secondary_I(round(0.9*size(Secondary_I,1)):end,round(0.75*size(Secondary_I,2)):end,:) = NaN;
-                temp = imwarp(Secondary_I,tform3d{k},'OutputView',refview{k});
+                temp = imwarp(Secondary_I,orig(k).tform3d,'OutputView',orig(k).refview);
                 temp(temp==0) = NaN;
                 cI(cI==0) = NaN;
                 rho(k) = corr(temp(:),cI(:),'rows','complete');
@@ -381,9 +335,9 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
                 if flipdim1(irho)
                     Secondary_Mask = flip(Secondary_Mask);
                 end
-                
-                Report.Matched_Image{sc} = origlist{irho};
-                Report.Mask_Name{sc} = [mname '.gz'];
+                mask_nii = write_matched_mask(orig(irho),Secondary_Masks);
+                Report.Matched_Image{sc} = orig(irho).list;
+                Report.Mask_Name{sc} = mask_nii;
             else
                 Report.IsMatched(sc) = false;
             end
