@@ -42,7 +42,16 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
 
     % Now, convert each primary scan to nifti, read
     niidir = fullfile(examdir,'NII');
-    cellfun(@(f) dcm2niix(f,niidir),primary_scans,'Uni',0);
+    overwrite = false;
+    if isfolder(niidir)
+        if overwrite
+            rmdir(niidir,'s')
+            cellfun(@(f) dcm2niix(f,niidir),primary_scans,'Uni',0);
+        end
+    else
+        cellfun(@(f) dcm2niix(f,niidir),primary_scans,'Uni',0);
+    end
+    
     list = dir(fullfile(niidir,'*.nii.gz'));
     list = fullfile({list.folder},{list.name});
     orig = struct();
@@ -353,6 +362,21 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
     function mname = write_matched_mask(O,S)
         alignedMask = uint8(zeros(O.head.ImageSize));
         tempmsk = imwarp(S.BW,O.tform3d,'OutputView',O.refview);
+        if all(abs(diff(O.idx))==2) % must interpolate mask
+            O.idx = O.idx(squeeze(sum(sum(tempmsk)))~=0);
+            tempmsk = tempmsk(:,:,squeeze(sum(sum(tempmsk)))~=0);
+            dist_map = zeros(size(tempmsk));
+            for i=1:length(O.idx)
+                dist_map(:,:,i) = bwdist(tempmsk(:,:,i));
+            end
+            newidx = O.idx(1):O.idx(end);
+            if isempty(newidx)
+                newidx = O.idx(1):-1:O.idx(end);
+            end
+            O.idx = newidx;
+            int_msk = imresize3(double(tempmsk),[size(tempmsk,1) size(tempmsk,2) length(O.idx)]);
+            tempmsk = int_msk>0.5;
+        end
         alignedMask(:,:,O.idx) = tempmsk;
         O.head.Datatype = 'uint8';
         O.head.MultiplicativeScaling = 1;
@@ -426,30 +450,37 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
             end
         end
         [mxpts,idx] = max(swmp,[],2);
+
         if any(mxpts==0) || ~all(abs(diff(idx))==1)
-            % Check for close correspondance
-            il = length(idx);
-            mdl = fitlm(0:il-1,idx);
-            incpt = round(mdl.Coefficients.Estimate(1));
-            slope = mdl.Coefficients.Estimate(2);
-            if abs((1-abs(slope)))<0.05 && mdl.Coefficients.pValue(2)<0.0001
-                % If estimated slope is ~1 and the fit is strong, construct
-                % new idx
-                slope = round(slope);
-                idx = incpt:slope:(il-1)*slope+incpt;
-                try
-                    cI = I(:,:,idx);
-                catch
+            % Check for every-other slice
+            if all(abs(diff(idx))==2)
+                cI = I(:,:,idx);
+                corresponds = true;
+            else
+                % Check for close correspondance
+                il = length(idx);
+                mdl = fitlm(0:il-1,idx);
+                incpt = round(mdl.Coefficients.Estimate(1));
+                slope = mdl.Coefficients.Estimate(2);
+                if abs((1-abs(slope)))<0.05 && mdl.Coefficients.pValue(2)<0.0001
+                    % If estimated slope is ~1 and the fit is strong, construct
+                    % new idx
+                    slope = round(slope);
+                    idx = incpt:slope:(il-1)*slope+incpt;
+                    try
+                        cI = I(:,:,idx);
+                    catch
+                        corresponds = false;
+                        cI = [];
+                        idx = [];
+                        return
+                    end
+                    corresponds = true;
+                else
                     corresponds = false;
                     cI = [];
                     idx = [];
-                    return
                 end
-                corresponds = true;
-            else
-                corresponds = false;
-                cI = [];
-                idx = [];
             end
         else
             cI = I(:,:,idx);

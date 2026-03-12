@@ -52,8 +52,13 @@ function [Secondary_I,Secondary_Mask,maskname,Masks] = combine_secondaryCaptures
     maskname(r~=mode(r)) = [];
     M(r~=mode(r)) = [];
     
-    Secondary_I = mat2gray(M{1}(:,:,:,2));
-    Secondary_I(M{1}(:,:,:,1)~=M{1}(:,:,:,2)) = NaN;
+    Secondary_I = mat2gray(M{1}(:,:,:,1));    
+    if length(maskname)>1
+        % For cases where only one secondary capture is available, don't
+        % mask out the segmented volume. Without additional captures, this
+        % messes up the feature point detection
+        Secondary_I(M{1}(:,:,:,1)~=M{1}(:,:,:,2)) = NaN;
+    end
     channel_ratio = double(M{1}(:,:,:,1))./double(M{1}(:,:,:,2));
     Secondary_Mask = channel_ratio>=1.5 & channel_ratio<=2.5;
     % Eliminate very small holes in the mask (use this rather than imfill
@@ -67,11 +72,14 @@ function [Secondary_I,Secondary_Mask,maskname,Masks] = combine_secondaryCaptures
 
     
     for sc=2:length(maskname)
-        im2 = mat2gray(M{sc}(:,:,:,2));
+        im2 = mat2gray(M{sc}(:,:,:,1));
         im2(M{sc}(:,:,:,1)~=M{sc}(:,:,:,2)) = NaN;
         channel_ratio = double(M{sc}(:,:,:,1))./double(M{sc}(:,:,:,2));
         m2 = channel_ratio>=1.5 & channel_ratio<=2.5;
+        % Eliminate very small holes in the mask (use this rather than imfill
+        % because there might be real holes in the segmentation)
         m2 = ~bwareaopen(~m2,5,6);
+        % Remove any cluster that is <1% of the mask
         cc = bwconncomp(m2,6);
         nvox = cellfun(@length,cc.PixelIdxList);
         small_vols = (nvox./sum(nvox))<0.01;
