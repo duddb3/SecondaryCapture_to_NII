@@ -53,7 +53,7 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series,overw
         cellfun(@(f) dcm2niix(f,niidir),primary_scans,'Uni',0);
     end
     
-    % Get the list of nifti files just created
+    % Get the list of nifti files in niidir
     list = dir(fullfile(niidir,'*.nii.gz'));
     list = fullfile({list.folder},{list.name});
     orig = struct();
