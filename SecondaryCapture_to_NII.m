@@ -1,10 +1,11 @@
-function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
+function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series,overwrite)
     % When segmentations of an image are saved as secondary captures, the 
     % resultant DICOM files contain no position or orientation information.
     % Further, it is often the case that files possess no information about
     % which image series was used as the basis of the segmentation. The
-    % secondary captures are often saved after some degree of zooming
-    % and/or panning have been applied. Lastly, it is often the case that
+    % secondary captures are often saved after some degree of zooming,
+    % rotation (in 90 degree increments), panning/cropping, and even 
+    % flipping have been applied. Lastly, it is often the case that 
     % secondary captures are only saved for a subset of slices of the
     % orginal image.
     % 
@@ -20,6 +21,7 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
     arguments
         examdir {mustBeFolder}
         all_masks_on_same_series {mustBeMember(all_masks_on_same_series,[0 1])} = 1
+        overwrite {mustBeMember(overwrite,[0 1])} = 0
     end
 
     % First, find all secondary captures
@@ -42,7 +44,6 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
 
     % Now, convert each primary scan to nifti, read
     niidir = fullfile(examdir,'NII');
-    overwrite = false;
     if isfolder(niidir)
         if overwrite
             rmdir(niidir,'s')
@@ -52,6 +53,7 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series)
         cellfun(@(f) dcm2niix(f,niidir),primary_scans,'Uni',0);
     end
     
+    % Get the list of nifti files just created
     list = dir(fullfile(niidir,'*.nii.gz'));
     list = fullfile({list.folder},{list.name});
     orig = struct();
