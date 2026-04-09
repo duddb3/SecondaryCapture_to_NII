@@ -1,4 +1,4 @@
-function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series,overwrite)
+function Report = SecondaryCapture_to_NII(examdir,niidir,all_masks_on_same_series,overwrite)
     % When segmentations of an image are saved as secondary captures, the 
     % resultant DICOM files contain no position or orientation information.
     % Further, it is often the case that files possess no information about
@@ -20,6 +20,7 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series,overw
 
     arguments
         examdir {mustBeFolder}
+        niidir {mustBeFolder}
         all_masks_on_same_series {mustBeMember(all_masks_on_same_series,[0 1])} = 1
         overwrite {mustBeMember(overwrite,[0 1])} = 0
     end
@@ -35,15 +36,16 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series,overw
     % seen cases where primary and secondary captures are mixed in the same
     % scan folder.
     scans = unique({dcms.folder});
-    metadata = cellfun(@(f) fast_dcm_head(f,{'ImageType'}),scans,'Uni',0);
+    metadata = cellfun(@(f) fast_dcm_head(f,{'ImageType','PhotometricInterpretation'}),scans,'Uni',0);
     is_secondary = cellfun(@(f) all(contains({f.ImageType},'secondary','IgnoreCase',true)),metadata);
+    is_rgb = cellfun(@(f) all(contains({f.PhotometricInterpretation},'RGB','IgnoreCase',true)),metadata);
     is_primary = cellfun(@(f) all(contains({f.ImageType},'primary','IgnoreCase',true)),metadata);
     is_volumetric = cellfun(@length,metadata)>1;
-    secondary_scans = scans(is_volumetric & is_secondary);
+    secondary_scans = scans(is_volumetric & is_secondary & is_rgb);
     primary_scans = scans(is_volumetric & is_primary);
 
     % Now, convert each primary scan to nifti, read
-    niidir = fullfile(examdir,'NII');
+    % niidir = fullfile(examdir,'NII');
     if isfolder(niidir)
         if overwrite
             rmdir(niidir,'s')
@@ -54,7 +56,7 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series,overw
     end
     
     % Get the list of nifti files in niidir
-    list = dir(fullfile(niidir,'*.nii.gz'));
+    list = dir(fullfile(niidir,'**','*.nii.gz'));
     list = fullfile({list.folder},{list.name});
     orig = struct();
     not3d = false(size(list));
@@ -208,7 +210,7 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series,overw
                 if flipdim1(irho)
                     Secondary_Masks(m).BW = flip(Secondary_Masks(m).BW);
                 end
-                mask_nii = write_matched_mask(orig(irho),Secondary_Masks(m));
+                mask_nii = write_matched_mask(orig(irho),Secondary_Masks(m),overwrite);
                 Report.Matched_Image{m} = orig(irho).list;
                 Report.Mask_Name{m} = mask_nii;
             end
@@ -346,7 +348,7 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series,overw
                 if flipdim1(irho)
                     Secondary_Mask = flip(Secondary_Mask);
                 end
-                mask_nii = write_matched_mask(orig(irho),Secondary_Masks);
+                mask_nii = write_matched_mask(orig(irho),Secondary_Masks,overwrite);
                 Report.Matched_Image{sc} = orig(irho).list;
                 Report.Mask_Name{sc} = mask_nii;
             else
@@ -361,7 +363,7 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series,overw
     %~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~%
     % Subroutines
     %~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~%
-    function mname = write_matched_mask(O,S)
+    function mname = write_matched_mask(O,S,ow)
         alignedMask = uint8(zeros(O.head.ImageSize));
         tempmsk = imwarp(S.BW,O.tform3d,'OutputView',O.refview);
         if all(abs(diff(O.idx))==2) % must interpolate mask
@@ -384,7 +386,12 @@ function Report = SecondaryCapture_to_NII(examdir,all_masks_on_same_series,overw
         O.head.MultiplicativeScaling = 1;
         O.head.AdditiveOffset = 0;
         [~,se] = fileparts(S.list);
-        mname = strrep(O.list,'.nii.gz',['_' se '.nii']);
+        mname = strrep(O.list,'.nii.gz',['_' se '.nii.gz']);
+        if exist(mname,'file')
+            if ~ow
+                return
+            end
+        end
         niftiwrite(alignedMask,mname,O.head)
         switch O.head.TransformName
             case 'Sform'
